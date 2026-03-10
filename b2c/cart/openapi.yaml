@@ -6,5 +6,488 @@ info:
     Проектируется синдикатом Interface.
     Домены: корзина (CRUD), избранное, главная страница (баннеры, подборки).
 
-paths: {}
-# Здесь команды Interface описывают свои эндпоинты
+tags:
+  - name: Избранное
+    description: Операции с избранными товарами
+
+paths:
+  /api/v1/favorites:
+    get:
+      tags:
+        - Избранное
+      summary: Получение списка избранных товаров
+      description: |
+        Возвращает список товаров, добавленных пользователем в избранное.
+        Сервис хранит только product_id и обращается в B2B с батч-запросом
+        для получения актуальной информации о товарах, их SKU, ценах и наличии.
+
+        Если B2B временно недоступен — возвращается ошибка 503.
+        Товары, которые не найдены в B2B (например, удалены из каталога),
+        исключаются из списка `items` и их идентификаторы возвращаются в поле
+        `unavailable_ids`. Клиент может предложить пользователю очистить их.
+
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          description: Идентификатор пользователя (UUID)
+          schema:
+            type: string
+            format: uuid
+            example: "123e4567-e89b-12d3-a456-426614174000"
+        - name: limit
+          in: query
+          required: false
+          description: Максимальное количество элементов в ответе (пагинация)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          description: Смещение для пагинации
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+
+      responses:
+        "200":
+          description: Успешное получение списка избранного
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FavoritesResponse"
+              example:
+                items:
+                  - product:
+                      id: "550e8400-e29b-41d4-a716-446655440000"
+                      title: "iPhone 15 Pro Max"
+                      description: "Флагман Apple..."
+                      status: "MODERATED"
+                      category:
+                        id: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+                        name: "Смартфоны"
+                      images:
+                        - url: "/s3/iphone15-1.jpg"
+                          ordering: 0
+                      characteristics:
+                        - name: "Бренд"
+                          value: "Apple"
+                      skus:
+                        - id: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+                          name: "256GB Black"
+                          price: 12999000
+                          active_quantity: 5
+                          characteristics:
+                            - name: "Цвет"
+                              value: "Чёрный"
+                            - name: "Объём памяти"
+                              value: "256 ГБ"
+                        - id: "8a4e3f9c-1a2b-4c8d-9e5f-6b7a8c9d0e1f"
+                          name: "256GB White"
+                          price: 12999000
+                          active_quantity: 0
+                    added_at: "2025-03-09T12:00:00Z"
+                total: 1
+                unavailable_ids:
+                  - "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                  - "1e2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c"
+
+        "400":
+          description: Невалидные параметры запроса (например, limit/offset вне диапазона или некорректный UUID)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "INVALID_PARAMETER"
+                message: "Параметр limit должен быть от 1 до 100"
+
+        "401":
+          description: Пользователь не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "UNAUTHORIZED"
+                message: "Требуется авторизация"
+
+        "404":
+          description: Список избранного для пользователя не найден (пустой)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "FAVORITES_NOT_FOUND"
+                message: "У пользователя нет избранных товаров"
+
+        "503":
+          description: B2B сервис временно недоступен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "B2B_UNAVAILABLE"
+                message: "Сервис товаров временно недоступен, попробуйте позже"
+
+  /api/v1/favorites/{product_id}:
+    post:
+      tags:
+        - Избранное
+      summary: Добавление товара в избранное
+      description: |
+        Добавляет товар в избранное пользователя.
+        Если товар уже находится в избранном, можно вернуть 200,
+        чтобы операция была безопасной для повторного вызова.
+
+      parameters:
+        - name: product_id
+          in: path
+          required: true
+          description: Идентификатор товара (UUID)
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: user_id
+          in: query
+          required: true
+          description: Идентификатор пользователя (UUID)
+          schema:
+            type: string
+            format: uuid
+            example: "123e4567-e89b-12d3-a456-426614174000"
+
+      responses:
+        "201":
+          description: Товар успешно добавлен в избранное
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FavoriteMutationResponse"
+              example:
+                product_id: "550e8400-e29b-41d4-a716-446655440000"
+                user_id: "123e4567-e89b-12d3-a456-426614174000"
+                added_at: "2025-03-10T10:00:00Z"
+                message: "Товар добавлен в избранное"
+
+        "200":
+          description: Товар уже был в избранном
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FavoriteMutationResponse"
+              example:
+                product_id: "550e8400-e29b-41d4-a716-446655440000"
+                user_id: "123e4567-e89b-12d3-a456-426614174000"
+                added_at: "2025-03-10T10:00:00Z"
+                message: "Товар уже находится в избранном"
+
+        "400":
+          description: Невалидные параметры запроса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "INVALID_PARAMETER"
+                message: "Некорректный UUID product_id или user_id"
+
+        "401":
+          description: Пользователь не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "UNAUTHORIZED"
+                message: "Требуется авторизация"
+
+        "404":
+          description: Товар не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "PRODUCT_NOT_FOUND"
+                message: "Товар не найден"
+
+        "503":
+          description: B2B сервис временно недоступен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "B2B_UNAVAILABLE"
+                message: "Сервис товаров временно недоступен, попробуйте позже"
+
+    delete:
+      tags:
+        - Избранное
+      summary: Удаление товара из избранного
+      description: |
+        Удаляет товар из избранного пользователя.
+        Если товара не было в избранном, можно всё равно вернуть 204.
+
+      parameters:
+        - name: product_id
+          in: path
+          required: true
+          description: Идентификатор товара (UUID)
+          schema:
+            type: string
+            format: uuid
+            example: "550e8400-e29b-41d4-a716-446655440000"
+        - name: user_id
+          in: query
+          required: true
+          description: Идентификатор пользователя (UUID)
+          schema:
+            type: string
+            format: uuid
+            example: "123e4567-e89b-12d3-a456-426614174000"
+
+      responses:
+        "204":
+          description: Товар успешно удалён из избранного
+
+        "400":
+          description: Невалидные параметры запроса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "INVALID_PARAMETER"
+                message: "Некорректный UUID product_id или user_id"
+
+        "401":
+          description: Пользователь не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "UNAUTHORIZED"
+                message: "Требуется авторизация"
+
+        "404":
+          description: Товар не найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "PRODUCT_NOT_FOUND"
+                message: "Товар не найден"
+
+        "503":
+          description: B2B сервис временно недоступен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                code: "B2B_UNAVAILABLE"
+                message: "Сервис товаров временно недоступен, попробуйте позже"
+
+components:
+  schemas:
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+        name:
+          type: string
+          example: "Смартфоны"
+      required:
+        - id
+        - name
+
+    Image:
+      type: object
+      properties:
+        url:
+          type: string
+          example: "/s3/iphone15-1.jpg"
+        ordering:
+          type: integer
+          example: 0
+      required:
+        - url
+        - ordering
+
+    Characteristic:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "Бренд"
+        value:
+          type: string
+          example: "Apple"
+      required:
+        - name
+        - value
+
+    SKU:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+        name:
+          type: string
+          example: "256GB Black"
+        price:
+          type: integer
+          description: Цена в копейках
+          example: 12999000
+        active_quantity:
+          type: integer
+          description: Доступное количество на складе
+          example: 5
+        characteristics:
+          type: array
+          items:
+            $ref: "#/components/schemas/Characteristic"
+      required:
+        - id
+        - name
+        - price
+        - active_quantity
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        title:
+          type: string
+          example: "iPhone 15 Pro Max"
+        description:
+          type: string
+          example: "Флагман Apple..."
+        status:
+          type: string
+          enum: [CREATED, ON_MODERATION, MODERATED, BLOCKED]
+          example: "MODERATED"
+        category:
+          $ref: "#/components/schemas/Category"
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/Image"
+        characteristics:
+          type: array
+          items:
+            $ref: "#/components/schemas/Characteristic"
+        skus:
+          type: array
+          items:
+            $ref: "#/components/schemas/SKU"
+      required:
+        - id
+        - title
+        - description
+        - status
+        - category
+        - images
+        - characteristics
+        - skus
+
+    FavoriteItem:
+      type: object
+      properties:
+        product:
+          $ref: "#/components/schemas/Product"
+        added_at:
+          type: string
+          format: date-time
+          description: Дата и время добавления товара в избранное
+          example: "2025-03-09T12:00:00Z"
+      required:
+        - product
+        - added_at
+
+    FavoritesResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          description: Список избранных товаров (обогащённых данными из B2B)
+          items:
+            $ref: "#/components/schemas/FavoriteItem"
+        total:
+          type: integer
+          description: Общее количество товаров в избранном (без учёта пагинации)
+          example: 5
+        unavailable_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: |
+            Идентификаторы товаров, которые были в избранном, но не найдены в B2B
+            (например, удалены из каталога). Клиент может отобразить их как недоступные
+            и предложить очистить.
+          example:
+            - "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            - "1e2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c"
+      required:
+        - items
+        - total
+        - unavailable_ids
+
+    FavoriteMutationResponse:
+      type: object
+      properties:
+        product_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        user_id:
+          type: string
+          format: uuid
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        added_at:
+          type: string
+          format: date-time
+          example: "2025-03-10T10:00:00Z"
+        message:
+          type: string
+          example: "Товар добавлен в избранное"
+      required:
+        - product_id
+        - user_id
+        - added_at
+        - message
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Код ошибки
+          example: "B2B_UNAVAILABLE"
+        message:
+          type: string
+          description: Описание ошибки
+          example: "Сервис товаров временно недоступен"
+      required:
+        - code
+        - message
